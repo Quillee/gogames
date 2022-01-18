@@ -1,0 +1,53 @@
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/gdamore/tcell"
+	"github.com/gdamore/tcell/encoding"
+)
+
+func displayHelloWorld(s tcell.Screen, clr tcell.Color, content string) {
+	w, h := s.Size()
+	s.Clear()
+	style := tcell.StyleDefault.Foreground(clr).Background(tcell.ColorWhite)
+	emitStr(s, w/2-7, h/2, style, content)
+	emitStr(s, w/2-9, h/2+1, tcell.StyleDefault, "Press ESC to exit.")
+	s.Show()
+}
+
+// This program just prints "Hello, World!".  Press ESC to exit.
+func Example() {
+	encoding.Register()
+
+	s, e := tcell.NewScreen()
+	if e != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", e)
+		os.Exit(1)
+	}
+	if e := s.Init(); e != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", e)
+		os.Exit(1)
+	}
+
+	defStyle := tcell.StyleDefault.
+		Background(tcell.ColorBlack).
+		Foreground(tcell.ColorWhite)
+	s.SetStyle(defStyle)
+
+	displayHelloWorld(s, tcell.ColorDarkRed, "Goodby World")
+
+	for {
+		switch ev := s.PollEvent().(type) {
+		case *tcell.EventResize:
+			s.Sync()
+			displayHelloWorld(s, tcell.ColorTurquoise, "Updated")
+		case *tcell.EventKey:
+			if ev.Key() == tcell.KeyEscape {
+				s.Fini()
+				os.Exit(0)
+			}
+		}
+	}
+}
