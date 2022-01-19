@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/gdamore/tcell"
@@ -15,12 +16,15 @@ const (
 	SCREEN_NOT_INITIALIZED E_ERROR = iota + 1
 )
 
-var PADDLE_SYMBOL = 0x2588
+const PADDLE_SYMBOL = 0x2588
+const BALL_SYMBOL = 0x25CF
 
-func printAlongCol(s tcell.Screen, x, y, rowlen int, str int) {
-	for i := 0; i < rowlen; i++ {
-		s.SetContent(x, y, rune(str), nil, tcell.StyleDefault)
-		y++
+func printChar(s tcell.Screen, x, y, h, w int, str rune) {
+	for row := 0; row < h; row++ {
+		for col := 0; col < w; col++ {
+			s.SetContent(x, y, rune(str), nil, tcell.StyleDefault)
+			y++
+		}
 	}
 }
 
@@ -50,14 +54,25 @@ func handleWarn(fmt string, code E_ERROR, err error, args ...interface{}) bool {
 }
 
 type Position struct {
-	x int
-	y int
+	x    int
+	y    int
+	char rune
+}
+
+type VecMath interface {
+	add(pos1, pos2 *Position)
+}
+
+type Ball struct {
+	pos      Position
+	velocity Position
+	radius   int
 }
 
 type Player struct {
 	pos     Position
-	score   int
 	bgColor tcell.Color
+	score   int
 }
 
 type PlayerEvent interface {
@@ -65,9 +80,15 @@ type PlayerEvent interface {
 	moveDown()
 }
 
+type GameEvent struct {
+	p     Player
+	event string
+	key   string
+}
+
 type GameState struct {
 	screen       tcell.Screen
-	ballPosition Position
+	ball         Ball
 	dbg          bool
 	leftPaddle   Player
 	rightPaddle  Player
@@ -80,10 +101,11 @@ func constructGameState(s tcell.Screen) GameState {
 	state := GameState{screen: s,
 		isBallMoving: false,
 		dbg:          true,
-		paddleLen:    4,
-		ballPosition: Position{x: w / 2, y: h / 2}}
-	state.leftPaddle = Player{pos: Position{x: 0, y: (h / 2) - state.paddleLen/2}, score: 0}
-	state.rightPaddle = Player{pos: Position{x: w - 1, y: (h / 2) - state.paddleLen/2}, score: 0}
+		paddleLen:    4}
+
+	state.ball = Ball{pos: Position{x: w / 2, y: h / 2, char: BALL_SYMBOL}, velocity: Position{x: 1, y: 2}, radius: 1}
+	state.leftPaddle = Player{pos: Position{x: 0, y: (h / 2) - state.paddleLen/2, char: PADDLE_SYMBOL}, score: 0}
+	state.rightPaddle = Player{pos: Position{x: w - 1, y: (h / 2) - state.paddleLen/2, char: PADDLE_SYMBOL}, score: 0}
 	return state
 }
 
@@ -108,28 +130,22 @@ func startGame(screen tcell.Screen) {
 
 func gameLoop(state *GameState) {
 	// handle player event
-	var event chan string = make(chan string, 3)
+	event := make(chan GameEvent)
 	go handleEvent(state, event)
 	for {
+		state.screen.Clear()
 		select {
 		case e := <-event:
 			if state.dbg {
-				print(state.screen, 1, 2, "Event handled! redraw")
-			}
-			if e == "redraw" {
+				h, w := state.screen.Size()
+				print(state.screen, 1, 0, fmt.Sprintf("KeyActivated! EventType: %s, Key: %s, Player: %s, (H,W): (%d,%d)", e.event, e.key, printPlayer(e.p), h, w))
 			}
 		default:
-			if state.dbg {
-				print(state.screen, 1, 1, "No Event sent")
-			}
+			time.Sleep(time.Millisecond * 75)
 		}
+		update(state)
 		draw(*state)
-		state.ballPosition.x++
-		print(state.screen,
-			state.ballPosition.x,
-			state.ballPosition.y, ".")
-
-		state.screen.Clear()
+		state.screen.Show()
 		// player movement
 		// draw ball
 		// update ball movement
@@ -140,18 +156,30 @@ func gameLoop(state *GameState) {
 	}
 }
 
-func draw(state GameState) {
-	printAlongCol(state.screen,
-		state.leftPaddle.pos.x,
-		state.leftPaddle.pos.y,
-		state.paddleLen, PADDLE_SYMBOL)
-	printAlongCol(state.screen,
-		state.rightPaddle.pos.x,
-		state.rightPaddle.pos.y,
-		state.paddleLen, PADDLE_SYMBOL)
+func update(state *GameState) {
+	state.ball.pos.add(state.ball.velocity)
 }
 
-func handleEvent(state *GameState, event chan string) {
+func draw(state GameState) {
+	printChar(state.screen,
+		state.leftPaddle.pos.x,
+		state.leftPaddle.pos.y,
+		state.paddleLen, 1,
+		state.leftPaddle.pos.char)
+	printChar(state.screen,
+		state.rightPaddle.pos.x,
+		state.rightPaddle.pos.y,
+		state.paddleLen, 1,
+		state.rightPaddle.pos.char)
+	printChar(state.screen,
+		state.ball.pos.x,
+		state.ball.pos.y,
+		state.ball.radius,
+		state.ball.radius,
+		state.ball.pos.char)
+}
+
+func handleEvent(state *GameState, event chan GameEvent) {
 	// eventMap
 	eventMap := map[string]*Player{
 		"Rune[w]": &state.leftPaddle,
@@ -169,9 +197,6 @@ func handleEvent(state *GameState, event chan string) {
 			p, isin := eventMap[keyPress]
 			if isin {
 				w, h := state.screen.Size()
-				if state.dbg {
-					print(state.screen, 1, 0, fmt.Sprintf("KeyActivated! Key: %s, Player: %s, (H,W): (%d,%d)", ev.Name(), printPlayer(*p), h, w))
-				}
 				if keyPress == "Rune[w]" || keyPress == "Up" {
 					p.moveUp()
 				} else {
@@ -182,14 +207,13 @@ func handleEvent(state *GameState, event chan string) {
 				//  for height, subtract 1 so that it doesn't go off the screen
 				p.pos.x = int(math.Min(math.Max(float64(p.pos.x), 0.0), float64(w)))
 				p.pos.y = int(math.Min(math.Max(float64(p.pos.y), 0.0), float64(h-1-state.paddleLen)))
-				event <- "redraw"
+				event <- GameEvent{event: "redraw", p: *p, key: keyPress}
 			}
 			if ev.Key() == tcell.KeyEscape {
 				color.Blue("Exit key clicked, exiting now!")
 				state.screen.Fini()
 				os.Exit(0)
 			}
-			state.screen.Show()
 		}
 	}
 }
@@ -200,6 +224,11 @@ func (p *Player) moveUp() {
 
 func (p *Player) moveDown() {
 	p.pos.y++
+}
+
+func (pos *Position) add(other Position) {
+	pos.x += other.x
+	pos.y += other.y
 }
 
 func printPlayer(p Player) string {
